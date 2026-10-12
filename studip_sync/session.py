@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import time
 import urllib.parse
@@ -30,6 +31,16 @@ class MissingPermissionFolderError(Exception):
 
 class DownloadError(SessionError):
     pass
+
+
+def semester_sort_key(semester):
+    """Order semesters by start date, tolerating ints or ISO strings."""
+    start = semester.get("attributes", {}).get("start")
+
+    try:
+        return (0, float(start), "")
+    except (TypeError, ValueError):
+        return (1, 0.0, str(start or ""))
 
 
 class URL(object):
@@ -72,6 +83,9 @@ class URL(object):
     def files_api_download(self, file_id):
         return self.__relative_url("api.php/file/{}/download".format(file_id))
 
+    def jsonapi(self, path):
+        return self.__relative_url("jsonapi.php/v1/{}".format(path))
+
 
 class Session(object):
 
@@ -99,12 +113,115 @@ class Session(object):
         auth = AUTHENTICATION_TYPES[auth_type]
         auth.login(self, username, password, auth_type_data)
 
-    def get_courses(self, only_recent_semester=False):
-        with self.session.get(self.url.courses()) as response:
-            if not response.ok:
-                raise SessionError("Failed to get courses")
+    JSONAPI_PAGE_LIMIT = 100
 
-            return parsers.extract_courses(response.text, only_recent_semester)
+    def jsonapi_get(self, path, **params):
+        with self.session.get(self.url.jsonapi(path), params=params or None) as response:
+            if not response.ok:
+                raise SessionError("JSON:API request failed: {} -> {}".format(
+                    path, response.status_code))
+            try:
+                return response.json()
+            except ValueError:
+                raise SessionError("JSON:API answered non-JSON for " + path)
+
+    def jsonapi_collection(self, path, **params):
+        """Walk every page of a JSON:API collection.
+
+        Returns (data, included). Collections default to 30 per page and cap
+        the limit, so paging is not optional: 45 memberships already exceed it.
+        """
+        data = []
+        included = []
+
+        while True:
+            page = self.jsonapi_get(path, **dict(params, **{
+                "page[offset]": len(data), "page[limit]": self.JSONAPI_PAGE_LIMIT}))
+            items = page.get("data") or []
+            data += items
+            included += page.get("included") or []
+
+            # Advance by what the server returned, not by what was asked for:
+            # it may cap the page size below JSONAPI_PAGE_LIMIT, and counting
+            # in requested units then skips the rest of the collection.
+            total = page.get("meta", {}).get("page", {}).get("total", len(data))
+            if not items or len(data) >= total:
+                return data, included
+
+    def get_courses(self, only_recent_semester=False):
+        """The courses the user is a member of, newest semester last.
+
+        Not parsed out of the my_courses page as upstream does: Göttingen runs
+        Stud.IP 6.2, which ships that page's Vue app with empty props and
+        fetches the list client-side, so the `MyCoursesData = {...}` assignment
+        upstream greps for does not exist. It also answers 404 for every
+        api.php route. The JSON:API is what this instance actually maintains.
+        """
+        me = self.jsonapi_get("users/me").get("data", {}).get("id")
+        if not me:
+            raise SessionError("Failed to get courses: JSON:API did not identify the user")
+
+        memberships, included = self.jsonapi_collection(
+            "users/{}/course-memberships".format(me), include="course,course.start-semester")
+
+        courses = {item["id"]: item for item in included if item.get("type") == "courses"}
+        semesters = {item["id"]: item for item in included if item.get("type") == "semesters"}
+
+        # Chronological, so semester_id rises with time and the newest semester
+        # holds the highest one — the ordering --recent and the "N - Semester"
+        # directory names of use_new_file_structure both rely on.
+        order = sorted(semesters, key=lambda sem_id: semester_sort_key(semesters[sem_id]))
+        semester_ids = {sem_id: i + 1 for i, sem_id in enumerate(order)}
+
+        # Prefer the semester Stud.IP itself flags as current: "latest" would
+        # mean a future semester as soon as one course is registered in it.
+        recent = next((sem_id for sem_id in order
+                       if semesters[sem_id].get("attributes", {}).get("is-current")),
+                      order[-1] if order else None)
+
+        listed = []
+        for membership in memberships:
+            course_id = (membership.get("relationships", {}).get("course", {})
+                         .get("data") or {}).get("id")
+            course = courses.get(course_id)
+            if not course:
+                continue
+
+            sem_id = (course.get("relationships", {}).get("start-semester", {})
+                      .get("data") or {}).get("id")
+
+            if only_recent_semester and sem_id != recent:
+                continue
+
+            save_as = course.get("attributes", {}).get("title", "").strip()
+            save_as = re.sub(r"\s\s+", " ", save_as).replace("/", "--")
+
+            listed.append({
+                "course_id": course_id,
+                "save_as": save_as,
+                "semester": semesters.get(sem_id, {}).get("attributes", {}).get(
+                    "title", "unknown semester").strip(),
+                "semester_id": semester_ids.get(sem_id, 0)
+            })
+
+        # One membership per course, and a stable order to sync in.
+        unique = {course["course_id"]: course for course in listed}
+        courses = sorted(unique.values(), key=lambda course: (course["semester_id"],
+                                                              course["save_as"],
+                                                              course["course_id"]))
+
+        # Distinct courses can carry the same title — parallel Übung groups
+        # especially. save_as becomes a directory name, so collisions would
+        # interleave two courses' files; keep them apart.
+        seen = {}
+        for course in courses:
+            key = (course["semester_id"], course["save_as"])
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] > 1:
+                course["save_as"] = "{} ({})".format(course["save_as"],
+                                                     course["course_id"][:8])
+
+        return courses
 
     def check_course_new_files(self, course_id, last_sync):
         params = {"cid": course_id}
