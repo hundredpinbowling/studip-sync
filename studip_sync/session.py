@@ -33,6 +33,41 @@ class DownloadError(SessionError):
     pass
 
 
+class SessionExpiredError(DownloadError):
+    """Stud.IP no longer recognises the session, mid-run.
+
+    A DownloadError on purpose: the --old bulk path in studip_sync.py has no
+    notion of a session dying and need not grow one — its DownloadError
+    handler records the failed course and moves on, which is the best it can
+    do. The callers that can do better — retry_once_after_relogin, and
+    StudIPRSync.sync, which stops the run on a message — catch this class
+    ahead of DownloadError.
+    """
+
+
+# An anonymous request is redirected here, whatever it asked for. The landing
+# URL is the only dependable signal: Stud.IP serves the login page with HTTP
+# 200, so the status code says nothing, and the page renders in German or
+# English depending on account state, so the body cannot be matched either.
+# The login check in logins/general.py uses the same signal.
+LOGIN_PATH = "/dispatch.php/login"
+
+
+def raise_if_logged_out(response):
+    """Raise SessionExpiredError if a request landed on the login page.
+
+    Stud.IP drops a session mid-run — an absolute server-side cap, or the
+    instance shedding sessions under a burst of requests, which is the same
+    flakiness that makes requests worth retrying at all. Every subsequent
+    request then answers with the login page rather than an error, so without
+    this check that page reaches the HTML parsers as if it were course
+    content, and the run dies on a bare AttributeError.
+    """
+    if LOGIN_PATH in response.url:
+        raise SessionExpiredError(
+            "Stud.IP session expired: the request landed on {}".format(response.url))
+
+
 def semester_sort_key(semester):
     """Order semesters by start date, tolerating ints or ISO strings."""
     start = semester.get("attributes", {}).get("start")
@@ -227,6 +262,7 @@ class Session(object):
         params = {"cid": course_id}
 
         with self.session.get(self.url.files_flat(), params=params) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 if response.status_code == 403 and "Documents" in response.text:
                     raise MissingFeatureError("This course has no files")
@@ -245,6 +281,7 @@ class Session(object):
         params = {"cid": course_id}
 
         with self.session.get(self.url.files_main(), params=params) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 raise DownloadError("Cannot access course files page")
             folder_id = parsers.extract_parent_folder_id(response.text)
@@ -259,6 +296,7 @@ class Session(object):
         }
 
         with self.session.post(download_url, params=params, data=data, stream=True) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 raise DownloadError("Cannot download course files")
             path = os.path.join(workdir, course_id)
@@ -268,6 +306,7 @@ class Session(object):
 
     def download_file(self, download_url, tempfile):
         with self.session.post(download_url, stream=True) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 raise DownloadError("Cannot download file")
 
@@ -279,6 +318,7 @@ class Session(object):
         download_url = self.url.files_api_download(file_id)
         
         with self.session.get(download_url, stream=True) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 print(response.text)
                 raise DownloadError("Cannot download file")
@@ -295,6 +335,7 @@ class Session(object):
             url = self.url.files_main()
 
         with self.session.get(url, params=params) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 if response.status_code == 403 and "Documents" in response.text:
                     raise MissingFeatureError("This course has no files")
@@ -312,6 +353,11 @@ class Session(object):
             url = self.url.files_api_top_folder(course_id)
 
         with self.session.get(url) as response:
+            # The api.php routes answer JSON, but an expired session is still
+            # redirected to the login page — with HTTP 200, so without this
+            # the whole page would be printed by the branch below or, worse,
+            # fed to json.loads.
+            raise_if_logged_out(response)
             if not response.ok:
                 print(response.text)
                 raise DownloadError("Cannot access course files/files_index page")
@@ -326,6 +372,7 @@ class Session(object):
         mediacast_list_url = self.url.mediacast_list()
 
         with self.session.get(mediacast_list_url, params=params) as response:
+            raise_if_logged_out(response)
             if not response.ok:
                 if response.status_code == 500 and "not found" in response.text:
                     raise MissingFeatureError("This course has no media")
@@ -368,6 +415,7 @@ class Session(object):
 
             if media_type == "player":
                 with self.session.get(media_player_url) as response:
+                    raise_if_logged_out(response)
                     if not response.ok:
                         raise DownloadError("Cannot access media file page: " + media_hash)
 
@@ -382,6 +430,10 @@ class Session(object):
                 raise ParserError("media_type is not a valid type")
 
             with self.session.get(download_media_url, stream=True) as response:
+                # Ahead of the skip below: an expired session would otherwise
+                # make every remaining media file "cannot download" and the
+                # course would look merely incomplete.
+                raise_if_logged_out(response)
                 if not response.ok:
                     print("\t\tCannot download media file: " + str(response))
                     continue

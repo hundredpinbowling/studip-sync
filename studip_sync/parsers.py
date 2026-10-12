@@ -5,6 +5,18 @@ from email.message import EmailMessage
 from functools import wraps
 from bs4 import BeautifulSoup
 
+
+def is_logged_out_page(html):
+    """Is this Stud.IP's page for an anonymous visitor?
+
+    Judged by the user id Stud.IP writes into its own JS config, which is the
+    literal "nobody" when no session is recognised. Body text would be the
+    obvious check and is the wrong one: the page renders in German or English
+    depending on account state.
+    """
+    return re.search(r'USER_ID\s*:\s*["\']nobody["\']', html) is not None
+
+
 def log_html_on_exception():
     def decorator(func):
         @wraps(func)
@@ -12,8 +24,16 @@ def log_html_on_exception():
             try:
                 return func(html, *args, **kwargs)
             except Exception as e:
-                print(html)
-                
+                # Dumping the page is for the case it was written for: a
+                # course page whose markup moved, which has to be read to be
+                # fixed. The login page explains nothing and buries the error
+                # under a screenful of HTML, so say what it is instead.
+                if is_logged_out_page(html):
+                    print("Got Stud.IP's logged out page instead of the expected one "
+                          "— the session expired. (Page not shown.)")
+                else:
+                    print(html)
+
                 raise e
 
         return inner
@@ -93,6 +113,9 @@ def extract_files_index_data(html):
     soup = BeautifulSoup(html, 'lxml')
 
     form = soup.find('form', id="files_table_form")
+
+    if not form:
+        raise ParserError("index_data: files_table_form not found")
 
     if "data-files" not in form.attrs:
         raise ParserError("index_data: Missing data-files attribute in form")

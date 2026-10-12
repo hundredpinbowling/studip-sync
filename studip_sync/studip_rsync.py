@@ -11,7 +11,7 @@ from studip_sync.config import CONFIG
 from studip_sync.logins import LoginError
 from studip_sync.plugins.plugins import PLUGINS
 from studip_sync.session import Session, DownloadError, MissingFeatureError, \
-    MissingPermissionFolderError
+    MissingPermissionFolderError, SessionExpiredError
 from studip_sync.parsers import ParserError
 
 
@@ -68,11 +68,14 @@ class StudIPRSync(object):
                     try:
                         files_root_dir = os.path.join(self.files_destination_dir, course_save_as)
 
-                        CourseRSync(session, self.workdir, files_root_dir, course,
-                                    sync_fully, use_api).download()
+                        retry_once_after_relogin(session, lambda: CourseRSync(
+                            session, self.workdir, files_root_dir, course, sync_fully,
+                            use_api).download())
                     except MissingFeatureError:
                         # Ignore if there are no files
                         pass
+                    except SessionExpiredError as e:
+                        return report_unrecoverable_expiry(e)
                     except DownloadError as e:
                         print("\tDownload of files failed: " + str(e))
                         status_code = 2
@@ -85,11 +88,13 @@ class StudIPRSync(object):
                         media_root_dir = os.path.join(self.media_destination_dir,
                                                       course_save_as)
 
-                        session.download_media(course["course_id"], media_root_dir,
-                                               course["save_as"])
+                        retry_once_after_relogin(session, lambda: session.download_media(
+                            course["course_id"], media_root_dir, course["save_as"]))
                     except MissingFeatureError:
                         # Ignore if there is no media
                         pass
+                    except SessionExpiredError as e:
+                        return report_unrecoverable_expiry(e)
                     except DownloadError as e:
                         print("\tDownload of media failed: " + str(e))
                         status_code = 2
@@ -117,6 +122,48 @@ class StudIPRSync(object):
 
 
 UNICODE_NORMALIZE_MODE = "NFKC"
+
+
+def report_unrecoverable_expiry(error):
+    """Say that the run is over because the session cannot be renewed.
+
+    Reached only after retry_once_after_relogin has already tried a fresh
+    login, so no later course would fare better either. Returns the status
+    code to end the sync on — the point of stopping here is to end on a
+    sentence rather than on the traceback this whole class exists to avoid.
+    """
+    print("\t" + str(error))
+    print("Stopping. Re-run to resume: files already downloaded are kept and the last-sync "
+          "timestamp has not moved.")
+
+    return 2
+
+
+def retry_once_after_relogin(session, action):
+    """Run `action`, logging in again and retrying it if the session died.
+
+    Stud.IP drops sessions mid-run: a long sync gets the login page back for a
+    course in the middle of the list, through no fault of that course.
+    Renewing the session costs a login request, where giving up costs every
+    course after this one. The credentials are cached in CONFIG after the
+    first login, so this does not prompt again.
+
+    Deliberately a single attempt: a session that dies again straight after a
+    fresh login is not the transient drop this handles, and the
+    SessionExpiredError is left to the caller.
+    """
+    try:
+        return action()
+    except SessionExpiredError:
+        print("\tStud.IP session expired, logging in again...")
+
+        try:
+            session.login(CONFIG.auth_type, CONFIG.auth_type_data, CONFIG.username,
+                          CONFIG.password)
+        except (LoginError, ParserError) as e:
+            raise SessionExpiredError("Stud.IP session expired, re-login failed: {}".format(e))
+
+        return action()
 
 
 def filter_skipped_courses(courses):
