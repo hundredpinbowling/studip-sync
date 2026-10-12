@@ -53,6 +53,10 @@ class StudIPRSync(object):
             if sync_recent:
                 print("Syncing only the most recent semester!")
 
+            courses, skipped = filter_skipped_courses(courses)
+            for course in skipped:
+                print("Skipping {} (skip_courses)".format(course["save_as"]))
+
             status_code = 0
             for i in range(0, len(courses)):
                 course = courses[i]
@@ -113,6 +117,31 @@ class StudIPRSync(object):
 
 
 UNICODE_NORMALIZE_MODE = "NFKC"
+
+
+def filter_skipped_courses(courses):
+    """Split a course list into (kept, skipped) per config's skip_courses.
+
+    A pattern matches a course if it equals the course id, or appears
+    anywhere in the course title, compared case-insensitively. Ids are the
+    precise form; titles are the convenient one, and survive a course being
+    renamed only in the parts that are quoted.
+    """
+    patterns = CONFIG.skip_courses
+
+    if not patterns:
+        return courses, []
+
+    kept = []
+    skipped = []
+
+    for course in courses:
+        matched = any(pattern == course["course_id"]
+                      or pattern.lower() in course["save_as"].lower()
+                      for pattern in patterns)
+        (skipped if matched else kept).append(course)
+
+    return kept, skipped
 
 
 def check_and_cleanup_form_data(form_data_files, form_data_folders, use_api):

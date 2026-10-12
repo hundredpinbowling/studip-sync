@@ -167,6 +167,23 @@ class Config(JSONConfig):
 
         return self.config.get("use_new_file_structure", False)
 
+    @property
+    def skip_courses(self):
+        """Courses never to sync: exact ids, or substrings of a course title.
+
+        Enrolments include things no one wants mirrored — a faculty forum with
+        thousands of attachments, say — and leaving one out of the sync is
+        otherwise only possible by leaving the course in Stud.IP.
+        """
+        if not self.config:
+            return []
+
+        patterns = self.config.get("skip_courses", [])
+        if isinstance(patterns, str):
+            patterns = [patterns]
+
+        return [pattern for pattern in patterns if pattern]
+
 
 try:
     CONFIG = Config()
