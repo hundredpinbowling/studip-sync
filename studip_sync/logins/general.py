@@ -18,7 +18,7 @@ class GeneralLogin(LoginBase):
 
     @staticmethod
     def login(session, username, password, auth_type_data):
-        with session.session.get(session.url.login_page()) as response:
+        with session.get(session.url.login_page()) as response:
             if not response.ok:
                 raise LoginError("Cannot access Stud.IP login page")
             login_data = GeneralLogin.extract_login_data(response.text)
@@ -30,7 +30,7 @@ class GeneralLogin(LoginBase):
 
         login_params = {**login_params_auth, **login_data['params']}
 
-        with session.session.post(login_data['action'], data=login_params) as response:
+        with session.post(login_data['action'], data=login_params) as response:
             if not response.ok:
                 raise LoginError("Cannot post login data")
             elif "messagebox_error" in response.text:
@@ -52,7 +52,7 @@ class GeneralLogin(LoginBase):
         # and a wrong password surfaced later as "Could not find courses".
         # An anonymous request is redirected to /dispatch.php/login, the same
         # signal scripts/studip.py:is_wall uses.
-        with session.session.get(session.url.studip_main()) as response:
+        with session.get(session.url.studip_main()) as response:
             if not response.ok:
                 raise LoginError("Cannot access Stud.IP main page")
             elif "/dispatch.php/login" in response.url:

@@ -8,7 +8,8 @@ import requests
 
 from studip_sync import parsers
 from studip_sync.atomic import stream_to_file
-from studip_sync.constants import URL_BASEURL_DEFAULT, AUTHENTICATION_TYPES
+from studip_sync.constants import URL_BASEURL_DEFAULT, AUTHENTICATION_TYPES, \
+    HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT, HTTP_DOWNLOAD_READ_TIMEOUT
 from studip_sync.parsers import ParserError
 from studip_sync.plugins.plugin_list import PluginList
 
@@ -124,11 +125,20 @@ class URL(object):
 
 class Session(object):
 
-    def __init__(self, plugins=None, base_url=URL_BASEURL_DEFAULT):
+    # Class attributes so that a Session is never without them, however it was
+    # built — __init__ overrides them per instance.
+    timeout = (HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)
+    download_timeout = (HTTP_CONNECT_TIMEOUT, HTTP_DOWNLOAD_READ_TIMEOUT)
+
+    def __init__(self, plugins=None, base_url=URL_BASEURL_DEFAULT,
+                 connect_timeout=HTTP_CONNECT_TIMEOUT, read_timeout=HTTP_READ_TIMEOUT,
+                 download_read_timeout=HTTP_DOWNLOAD_READ_TIMEOUT):
         super(Session, self).__init__()
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "WeWantFileSync"})
         self.url = URL(base_url)
+        self.timeout = (connect_timeout, read_timeout)
+        self.download_timeout = (connect_timeout, download_read_timeout)
 
         if plugins is None:
             self.plugins = PluginList()
@@ -141,6 +151,26 @@ class Session(object):
     def __exit__(self, exc_type, exc_value, traceback):
         self.session.__exit__()
 
+    def _timeout_for(self, kwargs):
+        """The timeout a request gets, unless it asked for one itself.
+
+        Keyed on `stream`, which marks exactly the requests whose first byte
+        is slow — Stud.IP builds a bulk .zip before it answers — and no
+        others. Doing it here rather than at the call sites keeps every
+        request covered: a new one has to opt out to go without a timeout,
+        instead of silently going without until someone notices.
+        """
+        if "timeout" in kwargs:
+            return kwargs.pop("timeout")
+
+        return self.download_timeout if kwargs.get("stream") else self.timeout
+
+    def get(self, url, **kwargs):
+        return self.session.get(url, timeout=self._timeout_for(kwargs), **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.session.post(url, timeout=self._timeout_for(kwargs), **kwargs)
+
     def set_base_url(self, new_base_url):
         self.url = URL(new_base_url)
 
@@ -151,7 +181,7 @@ class Session(object):
     JSONAPI_PAGE_LIMIT = 100
 
     def jsonapi_get(self, path, **params):
-        with self.session.get(self.url.jsonapi(path), params=params or None) as response:
+        with self.get(self.url.jsonapi(path), params=params or None) as response:
             if not response.ok:
                 raise SessionError("JSON:API request failed: {} -> {}".format(
                     path, response.status_code))
@@ -261,7 +291,7 @@ class Session(object):
     def check_course_new_files(self, course_id, last_sync):
         params = {"cid": course_id}
 
-        with self.session.get(self.url.files_flat(), params=params) as response:
+        with self.get(self.url.files_flat(), params=params) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 if response.status_code == 403 and "Documents" in response.text:
@@ -280,7 +310,7 @@ class Session(object):
     def download(self, course_id, workdir, sync_only=None):
         params = {"cid": course_id}
 
-        with self.session.get(self.url.files_main(), params=params) as response:
+        with self.get(self.url.files_main(), params=params) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 raise DownloadError("Cannot access course files page")
@@ -295,7 +325,7 @@ class Session(object):
             "download": 1
         }
 
-        with self.session.post(download_url, params=params, data=data, stream=True) as response:
+        with self.post(download_url, params=params, data=data, stream=True) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 raise DownloadError("Cannot download course files")
@@ -304,7 +334,7 @@ class Session(object):
             return path
 
     def download_file(self, download_url, tempfile):
-        with self.session.post(download_url, stream=True) as response:
+        with self.post(download_url, stream=True) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 raise DownloadError("Cannot download file")
@@ -315,7 +345,7 @@ class Session(object):
     def download_file_api(self, file_id, tempfile):
         download_url = self.url.files_api_download(file_id)
 
-        with self.session.get(download_url, stream=True) as response:
+        with self.get(download_url, stream=True) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 print(response.text)
@@ -331,7 +361,7 @@ class Session(object):
         else:
             url = self.url.files_main()
 
-        with self.session.get(url, params=params) as response:
+        with self.get(url, params=params) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 if response.status_code == 403 and "Documents" in response.text:
@@ -349,7 +379,7 @@ class Session(object):
         else:
             url = self.url.files_api_top_folder(course_id)
 
-        with self.session.get(url) as response:
+        with self.get(url) as response:
             # The api.php routes answer JSON, but an expired session is still
             # redirected to the login page — with HTTP 200, so without this
             # the whole page would be printed by the branch below or, worse,
@@ -368,7 +398,7 @@ class Session(object):
 
         mediacast_list_url = self.url.mediacast_list()
 
-        with self.session.get(mediacast_list_url, params=params) as response:
+        with self.get(mediacast_list_url, params=params) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 if response.status_code == 500 and "not found" in response.text:
@@ -411,7 +441,7 @@ class Session(object):
             print("\t\tDownloading " + media_hash)
 
             if media_type == "player":
-                with self.session.get(media_player_url) as response:
+                with self.get(media_player_url) as response:
                     raise_if_logged_out(response)
                     if not response.ok:
                         raise DownloadError("Cannot access media file page: " + media_hash)
@@ -426,7 +456,7 @@ class Session(object):
             else:
                 raise ParserError("media_type is not a valid type")
 
-            with self.session.get(download_media_url, stream=True) as response:
+            with self.get(download_media_url, stream=True) as response:
                 # Ahead of the skip below: an expired session would otherwise
                 # make every remaining media file "cannot download" and the
                 # course would look merely incomplete.
