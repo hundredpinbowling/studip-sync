@@ -74,8 +74,10 @@ class StudIPRSync(object):
                             session, self.workdir, files_root_dir, course, sync_fully,
                             use_api).download())
                     except MissingFeatureError:
-                        # Ignore if there are no files
-                        pass
+                        # Nothing to sync, but say so: silence here left the
+                        # course looking like it had been passed over by
+                        # accident.
+                        print("\tThis course has no file area")
                     except SessionExpiredError as e:
                         return report_unrecoverable_expiry(e)
                     except DownloadError as e:

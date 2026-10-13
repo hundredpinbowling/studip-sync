@@ -300,12 +300,16 @@ class Session(object):
                     raise DownloadError("Cannot access course files_flat page")
             last_edit = parsers.extract_files_flat_last_edit(response.text)
 
+        # A zero is not a failure to parse: both parsers return it only for an
+        # empty file area (a page that failed to parse raises ParserError), so
+        # there is nothing to fetch rather than something unknown to re-fetch.
         if last_edit == 0:
-            print("\tLast file edit couldn't be detected!")
-        else:
-            print("\tLast file edit: {}".format(
-                time.strftime("%d.%m.%Y %H:%M", time.gmtime(last_edit))))
-        return last_edit == 0 or last_edit > last_sync
+            print("\tNo new files for this course")
+            return False
+
+        print("\tLast file edit: {}".format(
+            time.strftime("%d.%m.%Y %H:%M", time.gmtime(last_edit))))
+        return last_edit > last_sync
 
     def download(self, course_id, workdir, sync_only=None):
         params = {"cid": course_id}
