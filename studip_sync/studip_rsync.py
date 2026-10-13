@@ -7,6 +7,7 @@ import unicodedata
 import string
 
 from studip_sync.arg_parser import ARGS
+from studip_sync.atomic import replace_file
 from studip_sync.config import CONFIG
 from studip_sync.logins import LoginError
 from studip_sync.plugins.plugins import PLUGINS
@@ -367,7 +368,14 @@ class CourseRSync:
                     raise DownloadError("File exists already, even after moving it away: " +
                                         file_path)
 
-                shutil.copyfile(target_file, file_path)
+                # The write the user actually keeps. shutil.copyfile straight
+                # onto file_path left a truncated file under the real name if
+                # it was interrupted, and the size check above has already
+                # happened by then — is_file_new would re-download it on the
+                # next run, but only after the branch above has renamed the
+                # good previous version away to .old, so until then the
+                # library holds nothing but the broken copy.
+                replace_file(target_file, file_path)
 
                 self.session.plugins.hook("hook_file_download_successful", file_data["name"],
                                           self.course_save_as, file_path)

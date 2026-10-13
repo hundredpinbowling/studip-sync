@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import time
 import urllib.parse
 import json
@@ -8,6 +7,7 @@ import json
 import requests
 
 from studip_sync import parsers
+from studip_sync.atomic import stream_to_file
 from studip_sync.constants import URL_BASEURL_DEFAULT, AUTHENTICATION_TYPES
 from studip_sync.parsers import ParserError
 from studip_sync.plugins.plugin_list import PluginList
@@ -300,9 +300,8 @@ class Session(object):
             if not response.ok:
                 raise DownloadError("Cannot download course files")
             path = os.path.join(workdir, course_id)
-            with open(path, "wb") as download_file:
-                shutil.copyfileobj(response.raw, download_file)
-                return path
+            stream_to_file(response, path)
+            return path
 
     def download_file(self, download_url, tempfile):
         with self.session.post(download_url, stream=True) as response:
@@ -310,21 +309,19 @@ class Session(object):
             if not response.ok:
                 raise DownloadError("Cannot download file")
 
-            with open(tempfile, "wb") as file:
-                shutil.copyfileobj(response.raw, file)
+            stream_to_file(response, tempfile)
 
 
     def download_file_api(self, file_id, tempfile):
         download_url = self.url.files_api_download(file_id)
-        
+
         with self.session.get(download_url, stream=True) as response:
             raise_if_logged_out(response)
             if not response.ok:
                 print(response.text)
                 raise DownloadError("Cannot download file")
 
-            with open(tempfile, "wb") as file:
-                shutil.copyfileobj(response.raw, file)
+            stream_to_file(response, tempfile)
 
     def get_files_index(self, course_id, folder_id=None):
         params = {"cid": course_id}
@@ -452,12 +449,11 @@ class Session(object):
                     raise FileError(
                         "Cannot access filepath since file already exists: " + filepath)
 
-                try:
-                    with open(filepath, "wb") as download_file:
-                        shutil.copyfileobj(response.raw, download_file)
-                except OSError as e:
-                    os.remove(filepath)
-                    raise e
+                # Was an open()/copyfileobj straight onto filepath, with an
+                # `except OSError: os.remove(filepath)` that could not work:
+                # if the open itself failed there was nothing to remove, and
+                # os.remove then raised FileNotFoundError over the real error.
+                stream_to_file(response, filepath)
 
                 self.plugins.hook("hook_file_download_successful", media_filename, course_save_as,
                                   filepath)
