@@ -31,7 +31,7 @@ def choose_preset():
     print("Supported universities:")
     i = 1
     for preset in LOGIN_PRESETS:
-        print("{}) {}".format(i, preset.name, preset.base_url))
+        print("{}) {} ({})".format(i, preset.name, preset.base_url))
         i += 1
 
     print("{}) Custom server".format(i))

@@ -92,7 +92,7 @@ def extract_files_flat_last_edit(html):
                     if 'data-sort-value' in td.attrs:
                         try:
                             return int(td.attrs['data-sort-value'])
-                        except:
+                        except ValueError:
                             raise ParserError("last_edit: Couldn't convert data-sort-value to int")
                     else:
                         raise ParserError(
@@ -155,7 +155,6 @@ def extract_csrf_token(html):
 def extract_courses(html, only_recent_semester):
     soup = BeautifulSoup(html, 'lxml')
 
-    p = re.compile("MyCoursesData = (.*);")
     courses = None
     for script in soup.find_all("script"):
         try: 

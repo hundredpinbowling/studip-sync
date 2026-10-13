@@ -7,7 +7,7 @@ class LoginError(Exception):
 class LoginBase:
     @staticmethod
     def login(session, username, password, auth_type_data):
-        raise NotImplemented()
+        raise NotImplementedError
 
 
 class LoginPreset:

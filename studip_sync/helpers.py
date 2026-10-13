@@ -11,15 +11,11 @@ class JSONConfig(object):
         super(JSONConfig, self).__init__()
 
         try:
-            config_file = open(config_path)
+            with open(config_path) as config_file:
+                self.config = json.load(config_file)
         except FileNotFoundError:
             raise ConfigError("Config file missing! Run 'studip-sync --init' to create a new "
                               "config file")
-
-        if config_file:
-            self.config = json.load(config_file)
-        else:
-            self.config = None
 
         self._check()
 
