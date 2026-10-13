@@ -7,9 +7,9 @@ import subprocess
 import time
 from datetime import datetime
 
-from studip_sync.config import CONFIG
+from studip_sync.config import get_config
 from studip_sync.logins import LoginError
-from studip_sync.plugins.plugins import PLUGINS
+from studip_sync.plugins.plugins import start_plugins
 from studip_sync.session import Session, DownloadError, MissingFeatureError
 from studip_sync.parsers import ParserError
 
@@ -25,8 +25,9 @@ class StudipSync(object):
         self.workdir = tempfile.mkdtemp(prefix="studip-sync")
         self.download_dir = os.path.join(self.workdir, "zips")
         self.extract_dir = os.path.join(self.workdir, "extracted")
-        self.files_destination_dir = CONFIG.files_destination
-        self.media_destination_dir = CONFIG.media_destination
+        config = get_config()
+        self.files_destination_dir = config.files_destination
+        self.media_destination_dir = config.media_destination
 
         os.makedirs(self.download_dir)
         os.makedirs(self.extract_dir)
@@ -36,16 +37,16 @@ class StudipSync(object):
             os.makedirs(self.media_destination_dir, exist_ok=True)
 
     def sync(self, sync_fully=False, sync_recent=False):
-        PLUGINS.hook("hook_start")
+        config = get_config()
 
         extractor = Extractor(self.extract_dir)
         rsync = RsyncWrapper()
 
-        with Session(base_url=CONFIG.base_url, plugins=PLUGINS) as session:
+        with Session(base_url=config.base_url, plugins=start_plugins()) as session:
             print("Logging in...")
             try:
-                session.login(CONFIG.auth_type, CONFIG.auth_type_data, CONFIG.username,
-                              CONFIG.password)
+                session.login(config.auth_type, config.auth_type_data, config.username,
+                              config.password)
             except (LoginError, ParserError) as e:
                 print("Login failed!")
                 print(e)
@@ -70,7 +71,8 @@ class StudipSync(object):
 
                 if self.files_destination_dir:
                     try:
-                        if sync_fully or session.check_course_new_files(course["course_id"], CONFIG.last_sync):
+                        if sync_fully or session.check_course_new_files(course["course_id"],
+                                                                       config.last_sync):
                             print("\tDownloading files...")
                             zip_location = session.download(
                                 course["course_id"], self.download_dir, course.get("sync_only"))
@@ -112,7 +114,7 @@ class StudipSync(object):
             rsync.sync(self.extract_dir + "/", self.files_destination_dir)
 
             if status_code == 0:
-                CONFIG.update_last_sync(int(time.time()))
+                config.update_last_sync(int(time.time()))
 
         return status_code
 

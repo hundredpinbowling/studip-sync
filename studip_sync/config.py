@@ -2,6 +2,7 @@ import getpass
 import os
 import shlex
 import subprocess
+from functools import lru_cache
 
 from studip_sync import get_config_file
 from studip_sync.arg_parser import ARGS
@@ -185,9 +186,11 @@ class Config(JSONConfig):
         return [pattern for pattern in patterns if pattern]
 
 
-try:
-    CONFIG = Config()
-except ConfigError as err:
-    print(str(err))
-    print("Aborting...")
-    exit(1)
+@lru_cache(maxsize=None)
+def get_config():
+    """The config, read from disk on first call and reused after that.
+
+    Lazy so importing a module doesn't touch the config file; a missing one
+    raises ConfigError where a value is read, which the entry point catches.
+    """
+    return Config()

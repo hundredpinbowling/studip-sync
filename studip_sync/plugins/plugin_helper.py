@@ -1,4 +1,4 @@
-from studip_sync.config import CONFIG
+from studip_sync.config import get_config
 from studip_sync.plugins import PluginError
 from studip_sync.plugins.plugin_loader import PluginLoader
 
@@ -11,7 +11,9 @@ class PluginHelper(object):
     def enable(self):
         print("Enabling plugin: " + self.plugin_name)
 
-        if self.plugin_name in CONFIG.plugins:
+        config = get_config()
+
+        if self.plugin_name in config.plugins:
             print("Plugin is already enabled. To reconfigure call --reconfigure-plugin PLUGIN")
             return 1
 
@@ -21,14 +23,14 @@ class PluginHelper(object):
             print(e)
             return 1
 
-        new_plugins = CONFIG.plugins
+        new_plugins = config.plugins
         new_plugins.append(self.plugin_name)
-        CONFIG.update_plugins(new_plugins)
+        config.update_plugins(new_plugins)
 
     def reconfigure(self):
         print("Reconfiguring plugin: " + self.plugin_name)
 
-        if self.plugin_name not in CONFIG.plugins:
+        if self.plugin_name not in get_config().plugins:
             print("Plugin is not enabled. To enable the plugin call --enable-plugin PLUGIN")
             return 1
 
@@ -39,20 +41,22 @@ class PluginHelper(object):
             return 1
 
     def _configure(self):
-        plugin = PluginLoader.load_plugin(self.plugin_name, CONFIG.config_dir)
+        plugin = PluginLoader.load_plugin(self.plugin_name, get_config().config_dir)
 
         plugin.hook_configure()
 
     def disable(self):
         print("Disabling plugin: " + self.plugin_name)
 
-        if self.plugin_name not in CONFIG.plugins:
+        config = get_config()
+
+        if self.plugin_name not in config.plugins:
             print("Plugin is already disabled.")
             return 1
 
-        new_plugins = CONFIG.plugins
+        new_plugins = config.plugins
         new_plugins.remove(self.plugin_name)
-        CONFIG.update_plugins(new_plugins)
+        config.update_plugins(new_plugins)
 
     def __enter__(self):
         return self

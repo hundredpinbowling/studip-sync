@@ -8,9 +8,9 @@ import string
 
 from studip_sync.arg_parser import ARGS
 from studip_sync.atomic import replace_file
-from studip_sync.config import CONFIG
+from studip_sync.config import get_config
 from studip_sync.logins import LoginError
-from studip_sync.plugins.plugins import PLUGINS
+from studip_sync.plugins.plugins import start_plugins
 from studip_sync.session import Session, DownloadError, MissingFeatureError, \
     MissingPermissionFolderError, SessionExpiredError
 from studip_sync.parsers import ParserError
@@ -21,8 +21,9 @@ class StudIPRSync(object):
     def __init__(self):
         super(StudIPRSync, self).__init__()
         self.workdir = tempfile.mkdtemp(prefix="studip-sync")
-        self.files_destination_dir = CONFIG.files_destination
-        self.media_destination_dir = CONFIG.media_destination
+        config = get_config()
+        self.files_destination_dir = config.files_destination
+        self.media_destination_dir = config.media_destination
 
         if self.files_destination_dir:
             os.makedirs(self.files_destination_dir, exist_ok=True)
@@ -30,13 +31,13 @@ class StudIPRSync(object):
             os.makedirs(self.media_destination_dir, exist_ok=True)
 
     def sync(self, sync_fully=False, sync_recent=False, use_api=True):
-        PLUGINS.hook("hook_start")
+        config = get_config()
 
-        with Session(base_url=CONFIG.base_url, plugins=PLUGINS) as session:
+        with Session(base_url=config.base_url, plugins=start_plugins()) as session:
             print("Logging in...")
             try:
-                session.login(CONFIG.auth_type, CONFIG.auth_type_data, CONFIG.username,
-                              CONFIG.password)
+                session.login(config.auth_type, config.auth_type_data, config.username,
+                              config.password)
             except (LoginError, ParserError) as e:
                 print("Login failed!")
                 print(e)
@@ -108,7 +109,7 @@ class StudIPRSync(object):
                             status_code = 2
 
         if self.files_destination_dir and status_code == 0:
-            CONFIG.update_last_sync(int(time.time()))
+            config.update_last_sync(int(time.time()))
 
         return status_code
 
@@ -146,7 +147,7 @@ def retry_once_after_relogin(session, action):
     Stud.IP drops sessions mid-run: a long sync gets the login page back for a
     course in the middle of the list, through no fault of that course.
     Renewing the session costs a login request, where giving up costs every
-    course after this one. The credentials are cached in CONFIG after the
+    course after this one. The credentials are cached in the config after the
     first login, so this does not prompt again.
 
     Deliberately a single attempt: a session that dies again straight after a
@@ -158,9 +159,11 @@ def retry_once_after_relogin(session, action):
     except SessionExpiredError:
         print("\tStud.IP session expired, logging in again...")
 
+        config = get_config()
+
         try:
-            session.login(CONFIG.auth_type, CONFIG.auth_type_data, CONFIG.username,
-                          CONFIG.password)
+            session.login(config.auth_type, config.auth_type_data, config.username,
+                          config.password)
         except (LoginError, ParserError) as e:
             raise SessionExpiredError("Stud.IP session expired, re-login failed: {}".format(e))
 
@@ -175,7 +178,7 @@ def filter_skipped_courses(courses):
     precise form; titles are the convenient one, and survive a course being
     renamed only in the parts that are quoted.
     """
-    patterns = CONFIG.skip_courses
+    patterns = get_config().skip_courses
 
     if not patterns:
         return courses, []
@@ -287,7 +290,7 @@ def is_file_new(file, file_path):
 
 
 def get_course_save_as(course):
-    if CONFIG.use_new_file_structure:
+    if get_config().use_new_file_structure:
         save_as_semester = course["semester"].replace("/", "--")
         save_as_semester = "{} - {}".format(course["semester_id"], save_as_semester)
 
@@ -318,7 +321,7 @@ class CourseRSync:
         if sync_fully:
             return True
 
-        return self.session.check_course_new_files(self.course_id, CONFIG.last_sync)
+        return self.session.check_course_new_files(self.course_id, get_config().last_sync)
 
     def download_recursive(self, folder_id=None, folder_path_relative=""):
         try:
