@@ -5,6 +5,8 @@ from email.message import EmailMessage
 from functools import wraps
 from bs4 import BeautifulSoup
 
+from studip_sync.helpers import sanitize_filename, sanitize_path_component
+
 
 def is_logged_out_page(html):
     """Is this Stud.IP's page for an anonymous visitor?
@@ -175,9 +177,7 @@ def extract_courses(html, only_recent_semester):
         course_ids = group["data"][0]["ids"]
         for course_id  in course_ids:
             course = courses["courses"][course_id]
-            save_as = course["name"].strip()
-            save_as = re.sub(r"\s\s+", " ", save_as)
-            save_as = save_as.replace("/", "--")
+            save_as = sanitize_path_component(course["name"], course_id)
 
             yield {
                 "course_id": course_id,
@@ -275,7 +275,7 @@ def extract_media_best_download_link(html):
     return try_parser_functions(html, [extract_table, extract_iframe, extract_video, extract_video_regex])
 
 
-@log_html_on_exception()
+# No log_html_on_exception: headers, not a page.
 def extract_filename_from_headers(headers):
     if "Content-Disposition" not in headers:
         raise ParserError(
@@ -291,4 +291,8 @@ def extract_filename_from_headers(headers):
     if header_params["filename"] == "":
         raise ParserError("media_filename_headers: filename value is empty")
 
-    return header_params["filename"]
+    # The server names the file: "../../.bashrc" would write outside the course dir.
+    try:
+        return sanitize_filename(header_params["filename"])
+    except ValueError as e:
+        raise ParserError("media_filename_headers: {}".format(e))

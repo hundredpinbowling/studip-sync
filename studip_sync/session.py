@@ -1,5 +1,4 @@
 import os
-import re
 import time
 import urllib.parse
 import json
@@ -10,6 +9,7 @@ from studip_sync import parsers
 from studip_sync.atomic import stream_to_file
 from studip_sync.constants import URL_BASEURL_DEFAULT, AUTHENTICATION_TYPES, \
     HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT, HTTP_DOWNLOAD_READ_TIMEOUT
+from studip_sync.helpers import sanitize_path_component
 from studip_sync.parsers import ParserError
 from studip_sync.plugins.plugin_list import PluginList
 
@@ -258,8 +258,8 @@ class Session(object):
             if only_recent_semester and sem_id != recent:
                 continue
 
-            save_as = course.get("attributes", {}).get("title", "").strip()
-            save_as = re.sub(r"\s\s+", " ", save_as).replace("/", "--")
+            save_as = sanitize_path_component(
+                course.get("attributes", {}).get("title", ""), course_id)
 
             listed.append({
                 "course_id": course_id,

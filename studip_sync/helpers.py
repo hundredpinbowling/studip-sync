@@ -1,9 +1,45 @@
 import json
 import os
+import re
 
 
 class ConfigError(Exception):
     pass
+
+
+def names_a_file(component):
+    """Does this name a file inside the directory holding it?
+
+    Dots-only names ("", ".", "..") name that directory or its parent instead.
+    """
+    return component.strip(".") != ""
+
+
+def sanitize_path_component(name, fallback_name):
+    """Turn a server-chosen name into one writable directory name.
+
+    Separators are flattened; a name that names no file falls back to
+    fallback_name.
+    """
+    component = re.sub(r"\s\s+", " ", name.strip()).replace("/", "--").replace("\\", "--")
+
+    if not names_a_file(component):
+        return fallback_name
+
+    return component
+
+
+def sanitize_filename(name):
+    """Turn a filename Stud.IP chose into one we can safely join onto a path.
+
+    Raises ValueError if nothing usable is left.
+    """
+    filename = os.path.basename(name.replace("\\", "/"))
+
+    if not names_a_file(filename):
+        raise ValueError("{} does not name a file".format(name))
+
+    return filename
 
 
 class JSONConfig(object):
